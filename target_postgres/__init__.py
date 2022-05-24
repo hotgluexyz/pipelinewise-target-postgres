@@ -204,7 +204,7 @@ def persist_lines(config, lines) -> None:
             #  1) Set ` 'primary_key_required': false ` in the target-postgres config.json
             #  or
             #  2) Use fastsync [postgres-to-postgres, mysql-to-postgres, etc.]
-            if config.get('primary_key_required', True) and len(o['key_properties']) == 0:
+            if config.get('primary_key_required', False) and len(o['key_properties']) == 0:
                 LOGGER.critical("Primary key is set to mandatory but not defined in the [%s] stream", stream)
                 raise Exception("key_properties field is required")
 

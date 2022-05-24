@@ -19,7 +19,7 @@ setup(name="pipelinewise-target-postgres",
       py_modules=["target_postgres"],
       install_requires=[
           'pipelinewise-singer-python==1.*',
-          'psycopg2-binary==2.8.5',
+          'psycopg2-binary==2.9.3',
           'inflection==0.3.1',
           'joblib==0.16.0'
       ],
@@ -32,7 +32,7 @@ setup(name="pipelinewise-target-postgres",
       },
       entry_points="""
           [console_scripts]
-          target-postgres=target_postgres:main
+          pipelinewise-target-postgres=target_postgres:main
       """,
       packages=["target_postgres"],
       package_data={},

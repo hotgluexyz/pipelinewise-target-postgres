@@ -13,6 +13,7 @@ virtualenvs/
 *__pycache__/
 *~
 dist/
+build/
 
 # Singer JSON files
 properties.json
