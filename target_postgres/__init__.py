@@ -210,6 +210,9 @@ def persist_lines(config, lines) -> None:
 
             key_properties[stream] = o['key_properties']
 
+            if not config.get('insertion_method_tables'):
+                config['insertion_method_tables'] = []
+    
             if config.get('add_metadata_columns') or config.get('hard_delete'):
                 stream_to_sync[stream] = DbSync(config, add_metadata_columns_to_schema(o))
             else:

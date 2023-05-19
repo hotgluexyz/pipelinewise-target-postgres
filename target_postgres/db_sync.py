@@ -353,6 +353,11 @@ class DbSync:
                 for name in self.flatten_schema
             ]
         )
+    
+    def drop_table(self):
+        stream_schema_message = self.stream_schema_message
+        table = self.table_name(stream_schema_message['stream'])
+        return "DROP TABLE IF EXISTS {}".format(table)
 
     def load_csv(self, file, count, size_bytes):
         stream_schema_message = self.stream_schema_message
@@ -582,6 +587,15 @@ class DbSync:
         stream_schema_message = self.stream_schema_message
         stream = stream_schema_message['stream']
         table_name = self.table_name(stream, without_schema=True)
+        insertion_method = self.connection_config.get("insertion_method")
+        insertion_method_tables = self.connection_config.get("insertion_method_tables")
+        ## drops table if insertion_method is "truncate"
+        if insertion_method and insertion_method == "truncate":
+            if len(insertion_method_tables) == 0: #if no insertion_method_tables specified, remove all tables and repopulate
+                self.query(self.drop_table())
+            elif table_name[1:-1] in insertion_method_tables: #and if table name in insertion_method_tables
+                self.query(self.drop_table())
+        
         found_tables = [table for table in (self.get_tables()) if f'"{table["table_name"].lower()}"' == table_name]
         if len(found_tables) == 0:
             query = self.create_table_query()
