@@ -593,7 +593,8 @@ class DbSync:
         if insertion_method and insertion_method == "truncate":
             if len(insertion_method_tables) == 0: #if no insertion_method_tables specified, remove all tables and repopulate
                 self.query(self.drop_table())
-            elif table_name[1:-1] in insertion_method_tables: #and if table name in insertion_method_tables
+            elif stream in insertion_method_tables: #and if table name in insertion_method_tables, truncate
+                self.logger.info("Table %s for stream %s exists. Dropping... %s",table_name, stream, table_name)
                 self.query(self.drop_table())
         
         found_tables = [table for table in (self.get_tables()) if f'"{table["table_name"].lower()}"' == table_name]
