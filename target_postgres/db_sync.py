@@ -562,7 +562,8 @@ class DbSync:
         ]
 
         for (column_name, column) in columns_to_replace:
-            self.version_column(column_name, stream)
+            if self.connection_config.get('is_versioning_enabled', False):
+                self.version_column(column_name, stream)
             self.add_column(column, stream)
 
     def drop_column(self, column_name, stream):
