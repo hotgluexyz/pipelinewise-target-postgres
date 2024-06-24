@@ -33,6 +33,7 @@ setup(name="pipelinewise-target-postgres",
       entry_points="""
           [console_scripts]
           target-postgres-beta=target_postgres:main
+          target-postgres=target_postgres:main
       """,
       packages=["target_postgres"],
       package_data={},
