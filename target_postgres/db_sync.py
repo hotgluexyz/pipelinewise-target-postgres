@@ -537,7 +537,9 @@ class DbSync:
         stream = stream_schema_message['stream']
         table_name = self.table_name(stream, without_schema=True)
         columns = self.get_table_columns(table_name)
+        self.logger.info(f"Got columns: {columns}")
         columns_dict = {column['column_name'].lower(): column for column in columns}
+        self.logger.info(f"Got columns_dict: {columns_dict}")
 
         columns_to_add = [
             column_clause(
