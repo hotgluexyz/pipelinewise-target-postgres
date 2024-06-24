@@ -537,9 +537,7 @@ class DbSync:
         stream = stream_schema_message['stream']
         table_name = self.table_name(stream, without_schema=True)
         columns = self.get_table_columns(table_name)
-        self.logger.info(f"Got columns: {columns}")
         columns_dict = {column['column_name'].lower(): column for column in columns}
-        self.logger.info(f"Got columns_dict: {columns_dict}")
 
         columns_to_add = [
             column_clause(
@@ -564,9 +562,10 @@ class DbSync:
         ]
 
         for (column_name, column) in columns_to_replace:
+            # NOTE: We only do this if versioning is turned on, otherwise we can safely ignore.
             if self.connection_config.get('is_versioning_enabled', False):
                 self.version_column(column_name, stream)
-            self.add_column(column, stream)
+                self.add_column(column, stream)
 
     def drop_column(self, column_name, stream):
         drop_column = "ALTER TABLE {} DROP COLUMN {}".format(self.table_name(stream), column_name)
