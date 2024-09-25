@@ -302,6 +302,9 @@ class DbSync:
         if 'ssl' in self.connection_config and self.connection_config['ssl'] == 'true':
             conn_string += " sslmode='require'"
 
+        # set statement timeout to 10 minutes
+        conn_string += f" options='-c statement_timeout={str(60000 * 10)}'"
+
         return psycopg2.connect(conn_string)
 
     def query(self, query, params=None):
