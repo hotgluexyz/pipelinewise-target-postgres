@@ -305,7 +305,11 @@ class DbSync:
         # set statement timeout to 10 minutes
         DEFAULT_STATEMENT_TIMEOUT = 60000 * 10
         statement_timeout = self.connection_config.get("statement_timeout", DEFAULT_STATEMENT_TIMEOUT)
-        conn_string += f" options='-c statement_timeout={str(statement_timeout)}'"
+        try:
+            statement_timeout=int(statement_timeout)
+        except Exception as exc:
+            raise Exception(f"Wrong type for statement_timeout, should be an integer. {statement_timeout=}") from exc
+        conn_string += f" options='-c statement_timeout={statement_timeout}'"
 
         return psycopg2.connect(conn_string)
 
