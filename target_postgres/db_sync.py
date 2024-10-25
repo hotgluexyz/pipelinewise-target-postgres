@@ -303,7 +303,9 @@ class DbSync:
             conn_string += " sslmode='require'"
 
         # set statement timeout to 10 minutes
-        conn_string += f" options='-c statement_timeout={str(60000 * 10)}'"
+        DEFAULT_STATEMENT_TIMEOUT = 60000 * 10
+        statement_timeout = self.connection_config.get("statement_timeout", DEFAULT_STATEMENT_TIMEOUT)
+        conn_string += f" options='-c statement_timeout={str(statement_timeout)}'"
 
         return psycopg2.connect(conn_string)
 
