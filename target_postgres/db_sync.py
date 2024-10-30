@@ -302,8 +302,8 @@ class DbSync:
         if 'ssl' in self.connection_config and self.connection_config['ssl'] == 'true':
             conn_string += " sslmode='require'"
 
-        # set statement timeout to 20 minutes
-        conn_string += f" options='-c statement_timeout={str(60000 * 20)}'"
+        # set statement timeout to 10 minutes
+        # conn_string += f" options='-c statement_timeout={str(60000 * 10)}'"
 
         return psycopg2.connect(conn_string)
 
@@ -369,6 +369,7 @@ class DbSync:
 
         with self.open_connection() as connection:
             with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute("set statement_timeout = '120min';")
                 inserts = 0
                 updates = 0
 
