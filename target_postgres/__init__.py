@@ -9,14 +9,15 @@ import copy
 from datetime import datetime
 from decimal import Decimal
 from tempfile import mkstemp
+from typing import Any, Dict, List
 
-from joblib import Parallel, delayed, parallel_backend
-from jsonschema import Draft7Validator, FormatChecker
-from singer import get_logger
+from joblib import Parallel, delayed, parallel_backend  # type: ignore
+from jsonschema import Draft7Validator, FormatChecker  # type: ignore
+import singer  # type: ignore
 
 from target_postgres.db_sync import DbSync
 
-LOGGER = get_logger('target_postgres')
+LOGGER = singer.get_logger('target_postgres')
 
 DEFAULT_BATCH_SIZE_ROWS = 100000
 DEFAULT_PARALLELISM = 0  # 0 The number of threads used to flush tables
@@ -71,28 +72,30 @@ def add_metadata_values_to_record(record_message):
     return extended_record
 
 
-def emit_state(state):
+def emit_state(state: dict) -> None:
     """Emit state message to standard output then it can be
     consumed by other components"""
-    if state is not None:
-        line = json.dumps(state)
-        LOGGER.debug('Emitting state %s', line)
-        sys.stdout.write("{}\n".format(line))
-        sys.stdout.flush()
+    if not state:
+        return
+
+    line = json.dumps(state)
+    LOGGER.debug('Emitting state %s', line)
+    sys.stdout.write("{}\n".format(line))
+    sys.stdout.flush()
 
 
 # pylint: disable=too-many-locals,too-many-branches,too-many-statements,invalid-name,consider-iterating-dictionary
-def persist_lines(config, lines) -> None:
+def persist_lines(config: dict, lines: io.TextIOWrapper) -> None:
     """Read singer messages and process them line by line"""
-    state = None
-    flushed_state = None
-    schemas = {}
-    key_properties = {}
-    validators = {}
-    records_to_load = {}
-    row_count = {}
-    stream_to_sync = {}
-    total_row_count = {}
+    state: Dict[str, Dict[str, Any]] = {}
+    flushed_state: Dict[str, Dict[str, Any]] = {}
+    schemas: Dict[str, Dict[str, Any]] = {}
+    key_properties: Dict[str, List[str]] = {}
+    validators: Dict[str, Draft7Validator] = {}
+    records_to_load: Dict[str, Dict[str, Any]] = {}
+    row_count: Dict[str, int] = {}
+    stream_to_sync: Dict[str, DbSync] = {}
+    total_row_count: Dict[str, int] = {}
     batch_size_rows = config.get('batch_size_rows', DEFAULT_BATCH_SIZE_ROWS)
 
     # Loop over lines from stdin
@@ -235,7 +238,7 @@ def persist_lines(config, lines) -> None:
             raise Exception("Unknown message type {} in message {}"
                             .format(o['type'], o))
 
-    # if some bucket has records that need to be flushed but haven't reached batch size
+    # If some bucket has records that need to be flushed but haven't reached batch size
     # then flush all buckets.
     if sum(row_count.values()) > 0:
         # flush all streams one last time, delete records if needed, reset counts and then emit current state
@@ -251,7 +254,7 @@ def flush_streams(
         row_count,
         stream_to_sync,
         config,
-        state,
+        state: dict,
         flushed_state,
         filter_streams=None):
     """
@@ -304,7 +307,7 @@ def flush_streams(
         # Update flushed streams
         if filter_streams:
             # update flushed_state position if we have state information for the stream
-            if state is not None and stream in state.get('bookmarks', {}):
+            if state and stream in state.get('bookmarks', {}):
                 # Create bookmark key if not exists
                 if 'bookmarks' not in flushed_state:
                     flushed_state['bookmarks'] = {}

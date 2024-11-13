@@ -11,9 +11,9 @@ from target_postgres.db_sync import DbSync
 from psycopg2.errors import InvalidTextRepresentation
 
 try:
-    import tests.utils as test_utils
+    import tests.utils as test_utils  # type: ignore
 except ImportError:
-    import utils as test_utils
+    import utils as test_utils  # type: ignore  
 
 METADATA_COLUMNS = [
     '_sdc_extracted_at',
