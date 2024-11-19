@@ -417,16 +417,18 @@ def load_stream_batch(stream, records_to_load, row_count, db_sync:DbSync, delete
     except Exception as e:
         batch_state["summary"][stream]["fail"] += len(records_to_load)
         for record in records_to_load.values():
-            batch_state["bookmarks"][stream].append({
+            bookmark = {
                 "hash": build_record_hash(record),
                 "success": False,
-                "external_id": record.get('cid',""),
                 "error": str(e)
-            })
+            }
+            if "externalId" in record:
+                bookmark["external_id"] = record["externalId"]
+            batch_state["bookmarks"][stream].append(bookmark)
 
     return batch_state
 # pylint: disable=unused-argument
-def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
+def flush_records(stream, records_to_load, row_count, db_sync: DbSync, temp_dir=None):
     """Take a list of records and load into database"""
     if temp_dir:
         temp_dir = os.path.expanduser(temp_dir)
@@ -444,11 +446,14 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
     with open(csv_fd, 'w+b') as f:
         for record in records_to_load.values():
             csv_line = db_sync.record_to_csv_line(record)
-            batch_bookmarks.append({
+            bookmark = {
                 "hash": build_record_hash(record),
                 "success": True,
-                "external_id": record.get('cid',""),
-            })
+            }
+            if "externalId" in record:
+                bookmark["external_id"] = record["externalId"]
+
+            batch_bookmarks.append(bookmark)
             f.write(bytes(csv_line + '\n', 'UTF-8'))
 
     size_bytes = os.path.getsize(csv_file)
