@@ -421,7 +421,7 @@ def load_stream_batch(stream, records_to_load, row_count, db_sync:DbSync, delete
                 "hash": build_record_hash(record),
                 "success": False,
                 "external_id": record.get('cid',""),
-                "reason": str(e)
+                "error": str(e)
             })
 
     return batch_state
@@ -448,7 +448,6 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
                 "hash": build_record_hash(record),
                 "success": True,
                 "external_id": record.get('cid',""),
-                "reason": ""
             })
             f.write(bytes(csv_line + '\n', 'UTF-8'))
 
@@ -459,7 +458,7 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
         batch_summary["updated"] += updated_lines
     except Exception as e:
         for batch_bookmark in batch_bookmarks:
-            batch_bookmark["reason"] = str(e)
+            batch_bookmark["error"] = str(e)
             batch_bookmark["success"] = False
         batch_summary["fail"] += len(batch_bookmarks)
 
