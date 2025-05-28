@@ -383,8 +383,12 @@ class DbSync:
                 with open(file, "rb") as f:
                     cur.copy_expert(copy_sql, f)
                 if len(self.stream_schema_message['key_properties']) > 0:
-                    cur.execute(self.update_from_temp_table(temp_table))
-                    updates = cur.rowcount
+                    try:
+                        cur.execute(self.update_from_temp_table(temp_table))
+                        updates = cur.rowcount
+                    except psycopg2.errors.DatatypeMismatch as e:
+                        self.logger.error("Datatype mismatch error: %s", e.pgerror)
+                        raise Exception(e.pgerror)
                 cur.execute(self.insert_from_temp_table(temp_table))
                 inserts = cur.rowcount
 
