@@ -387,7 +387,8 @@ class DbSync:
                         cur.execute(self.update_from_temp_table(temp_table))
                         updates = cur.rowcount
                     except Exception as e:
-                        self.logger.error("Datatype mismatch error: %s", str(e).replace('\n', ' '))
+                        # NOTE: We are pruning the \n from here to make sure we capture the error properly in stdout
+                        self.logger.error("Error: %s", str(e).replace('\n', ' '))
                         raise Exception(str(e).replace('\n', ' '))
                 cur.execute(self.insert_from_temp_table(temp_table))
                 inserts = cur.rowcount
