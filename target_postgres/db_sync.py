@@ -386,9 +386,9 @@ class DbSync:
                     try:
                         cur.execute(self.update_from_temp_table(temp_table))
                         updates = cur.rowcount
-                    except psycopg2.errors.DatatypeMismatch as e:
-                        self.logger.error("Datatype mismatch error: %s", e.pgerror)
-                        raise Exception(e.pgerror)
+                    except Exception as e:
+                        self.logger.error("Datatype mismatch error: %s", str(e).replace('\n', ' '))
+                        raise Exception(str(e).replace('\n', ' '))
                 cur.execute(self.insert_from_temp_table(temp_table))
                 inserts = cur.rowcount
 
