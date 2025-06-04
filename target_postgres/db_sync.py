@@ -615,4 +615,8 @@ class DbSync:
             self.grant_privilege(self.schema_name, self.grantees, self.grant_select_on_all_tables_in_schema)
         else:
             self.logger.info("Table '%s' exists", table_name)
+            # Log existing column types before updating
+            columns = self.get_table_columns(table_name)
+            self.logger.info("Existing column types in table '%s': %s", table_name, 
+                            json.dumps({col['column_name']: col['data_type'] for col in columns}))
             self.update_columns()
