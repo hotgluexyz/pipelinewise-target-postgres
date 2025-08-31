@@ -84,7 +84,7 @@ Full list of options in `config.json`:
 | validate_records                    | Boolean |            | (Default: False) Validate every single record message to the corresponding JSON schema. This option is disabled by default and invalid RECORD messages will fail only at load time by Postgres. Enabling this option will detect invalid records earlier but could cause performance degradation. |
 | temp_dir                            | String  |            | (Default: platform-dependent) Directory of temporary CSV files with RECORD messages. |
 | insertion_method                    | String  |            | (Default: 'incremental') Currently only handles 'truncate' (drop and re-create table before adding rows) and 'incremental' (upsert new rows) | 
-| insertion_method_tables             | Array(String)   |    | (Default: []) Tables to apply "insertion method" to. Has no effect if insertion method not specified. | 
+| insertion_method_tables             | Array(String)   |    | (Default: []) Names of streams corresponding to tables to apply "insertion method" to. Has no effect if insertion method not specified. | 
 ### To run tests:
 
 1. Define environment variables that requires running the tests
