@@ -338,13 +338,13 @@ class DbSync:
         if len(self.stream_schema_message['key_properties']) == 0:
             return None
         flatten = flatten_record(record, self.flatten_schema, max_level=self.data_flattening_max_level)
-        try:
-            key_props = [str(flatten[p]) for p in self.stream_schema_message['key_properties']]
-        except Exception as exc:
-            self.logger.info("Cannot find %s primary key(s) in record: %s",
-                             self.stream_schema_message['key_properties'],
-                             flatten)
-            raise exc
+        absent_pks = []
+        for p in self.stream_schema_message['key_properties']:
+            if p not in flatten:
+                absent_pks.append(p)
+        if len(absent_pks) > 0:
+            raise Exception("Primary key(s) are not defined in the record: {}".format(', '.join(absent_pks)))
+        key_props = [str(flatten[p]) for p in self.stream_schema_message['key_properties']]
         return ','.join(key_props)
 
     def record_to_csv_line(self, record):
