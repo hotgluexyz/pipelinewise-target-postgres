@@ -299,13 +299,17 @@ class DbSync:
             self.connection_config['port']
         )
 
-        if 'ssl' in self.connection_config and self.connection_config['ssl'] == 'true':
+        if 'ssl' in self.connection_config and self.connection_config['ssl'] in [True, 'true']:
             conn_string += " sslmode='require'"
 
-        # set statement timeout to 20 minutes
-        conn_string += f" options='-c statement_timeout={str(60000 * 20)}'"
-
-        return psycopg2.connect(conn_string)
+        conn = psycopg2.connect(conn_string)
+        
+        # set statement timeout to 20 minutes (after connection is established)
+        # This avoids issues with pooled connections that don't support startup parameters
+        with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = {str(60000 * 20)}")
+        
+        return conn
 
     def query(self, query, params=None):
         self.logger.debug("Running query: %s", query)
