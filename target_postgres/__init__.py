@@ -218,6 +218,12 @@ def persist_lines(config, lines) -> None:
             else:
                 stream_to_sync[stream] = DbSync(config, o)
 
+            # check if DB is ready mode only
+            is_db_locked = stream_to_sync[stream].query("SELECT pg_is_in_recovery()")
+            if is_db_locked[0][0]:
+                LOGGER.debug("Database is locked, it has Read Access only")
+                raise Exception(f"Database is locked, it has Read Access only")
+
             stream_to_sync[stream].create_schema_if_not_exists()
             stream_to_sync[stream].sync_table()
 
