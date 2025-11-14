@@ -1,15 +1,15 @@
-import json
-import sys
+from typing import Tuple
 import psycopg2
 import psycopg2.extras
 import collections
-import inflection
+import inflection  # type: ignore
 import re
 import uuid
 import itertools
 import time
-from singer import get_logger
-
+import singer  # type: ignore
+import joblib  # type: ignore
+import json
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
 def validate_config(config):
@@ -69,7 +69,7 @@ def column_type(schema_property):
     elif 'boolean' in property_type:
         col_type = 'boolean'
 
-    get_logger('target_postgres').debug("schema_property: %s -> col_type: %s", schema_property, col_type)
+    singer.get_logger('target_postgres').debug("schema_property: %s -> col_type: %s", schema_property, col_type)
 
     return col_type
 
@@ -206,7 +206,7 @@ class DbSync:
         self.stream_schema_message = stream_schema_message
 
         # logger to be used across the class's methods
-        self.logger = get_logger('target_postgres')
+        self.logger = singer.get_logger('target_postgres')
 
         # Validate connection configuration
         config_errors = validate_config(connection_config)
@@ -366,15 +366,16 @@ class DbSync:
         table = self.table_name(stream_schema_message['stream'])
         return "DROP TABLE IF EXISTS {}".format(table)
 
-    def load_csv(self, file, count, size_bytes):
+    def load_csv(self, file:str, count:int, size_bytes:int) -> Tuple[int, int]:
         stream_schema_message = self.stream_schema_message
         stream = stream_schema_message['stream']
         self.logger.info("Loading %d rows into '%s'", count, self.table_name(stream, False))
 
+        inserts = 0
+        updates = 0
+
         with self.open_connection() as connection:
             with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                inserts = 0
-                updates = 0
 
                 temp_table = self.table_name(stream_schema_message['stream'], is_temporary=True)
                 cur.execute(self.create_table_query(table_name=temp_table, is_temporary=True))
@@ -400,6 +401,7 @@ class DbSync:
                 self.logger.info('Loading into %s: %s',
                                  self.table_name(stream, False),
                                  json.dumps({'inserts': inserts, 'updates': updates, 'size_bytes': size_bytes}))
+        return inserts, updates
 
     # pylint: disable=duplicate-string-formatting-argument
     def insert_from_temp_table(self, temp_table):
