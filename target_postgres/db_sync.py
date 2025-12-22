@@ -386,52 +386,92 @@ class DbSync:
                 self.logger.debug(copy_sql)
                 with open(file, "rb") as f:
                     cur.copy_expert(copy_sql, f)
+                
+                # Build SQL column expressions with type casts for inserts/updates
+                select_expressions = self._select_column_expressions()
+                
                 if len(self.stream_schema_message['key_properties']) > 0:
                     try:
-                        cur.execute(self.update_from_temp_table(temp_table))
+                        cur.execute(self.update_from_temp_table(temp_table, select_expressions))
                         updates = cur.rowcount
                     except Exception as e:
                         # NOTE: We are pruning the \n from here to make sure we capture the error properly in stdout
                         self.logger.error("Error: %s", str(e).replace('\n', ' '))
                         raise Exception(str(e).replace('\n', ' '))
-                cur.execute(self.insert_from_temp_table(temp_table))
+                cur.execute(self.insert_from_temp_table(temp_table, select_expressions))
                 inserts = cur.rowcount
 
                 self.logger.info('Loading into %s: %s',
                                  self.table_name(stream, False),
                                  json.dumps({'inserts': inserts, 'updates': updates, 'size_bytes': size_bytes}))
 
-    # pylint: disable=duplicate-string-formatting-argument
-    def insert_from_temp_table(self, temp_table):
+    def _select_column_expressions(self):
+        """
+        Returns column expressions for selecting from the temp table,
+        casting to destination column types.
+        """
+        stream_schema_message = self.stream_schema_message
+        stream = stream_schema_message['stream']
+
+        # Get destination table column types from information_schema
+        table_name = self.table_name(stream, without_schema=True)
+        dest_columns = self.get_table_columns(table_name)
+        dest_type_map = {
+            safe_column_name(col['column_name']): col['data_type'].lower()
+            for col in dest_columns
+        }
+
+        expressions = []
+        for col in self.column_names():
+            dest_type = dest_type_map.get(col)
+            
+            # Always cast to destination type if available
+            # PostgreSQL optimizes same-type casts, so this is safe
+            if dest_type:
+                expr = f"s.{col}::{dest_type}"
+            else:
+                expr = f"s.{col}"
+
+            expressions.append(expr)
+
+        return expressions
+
+    def insert_from_temp_table(self, temp_table, select_expressions):
         stream_schema_message = self.stream_schema_message
         columns = self.column_names()
         table = self.table_name(stream_schema_message['stream'])
 
         if len(stream_schema_message['key_properties']) == 0:
             return """INSERT INTO {} ({})
-                    (SELECT s.* FROM {} s)
+                    (SELECT {} FROM {} s)
                     """.format(table,
                                ', '.join(columns),
+                               ', '.join(select_expressions),
                                temp_table)
 
         return """INSERT INTO {} ({})
-        (SELECT s.* FROM {} s LEFT OUTER JOIN {} t ON {} WHERE {})
+        (SELECT {} FROM {} s LEFT OUTER JOIN {} t ON {} WHERE {})
         """.format(table,
                    ', '.join(columns),
+                   ', '.join(select_expressions),
                    temp_table,
                    table,
                    self.primary_key_condition('t'),
                    self.primary_key_null_condition('t'))
 
-    def update_from_temp_table(self, temp_table):
+    def update_from_temp_table(self, temp_table, select_expressions):
         stream_schema_message = self.stream_schema_message
         columns = self.column_names()
         table = self.table_name(stream_schema_message['stream'])
 
+        set_clauses = ', '.join(
+            ['{}={}'.format(col, expr) for col, expr in zip(columns, select_expressions)]
+        )
+
         return """UPDATE {} SET {} FROM {} s
         WHERE {}
         """.format(table,
-                   ', '.join(['{}=s.{}'.format(c, c) for c in columns]),
+                   set_clauses,
                    temp_table,
                    self.primary_key_condition(table))
 
