@@ -32,7 +32,7 @@ class InvalidValidationOperationException(Exception):
     """Exception to raise when internal JSON schema validation process failed"""
 
 
-def log_event(event, level='info', **context):
+def log_event(event, *, level='info', **context):
     payload = {k: v for k, v in context.items() if v is not None}
     getattr(LOGGER, level)("%s %s", event, json.dumps(payload, sort_keys=True, default=str))
 
