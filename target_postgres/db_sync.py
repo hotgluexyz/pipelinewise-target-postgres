@@ -290,6 +290,10 @@ class DbSync:
             self.flatten_schema = flatten_schema(stream_schema_message['schema'],
                                                  max_level=self.data_flattening_max_level)
 
+    def _log(self, level, event, **context):
+        payload = {k: v for k, v in context.items() if v is not None}
+        getattr(self.logger, level)("%s %s", event, json.dumps(payload, sort_keys=True, default=str))
+
     def open_connection(self):
         conn_string = "host='{}' dbname='{}' user='{}' password='{}' port='{}'".format(
             self.connection_config['host'],
@@ -369,7 +373,16 @@ class DbSync:
     def load_csv(self, file, count, size_bytes):
         stream_schema_message = self.stream_schema_message
         stream = stream_schema_message['stream']
-        self.logger.info("Loading %d rows into '%s'", count, self.table_name(stream, False))
+        table_name = self.table_name(stream, False)
+        self._log(
+            'info',
+            'load_csv.start',
+            stream_name=stream,
+            schema_name=self.schema_name,
+            table_name=table_name,
+            batch_size_rows=count,
+            size_bytes=size_bytes
+        )
 
         with self.open_connection() as connection:
             with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -377,33 +390,111 @@ class DbSync:
                 updates = 0
 
                 temp_table = self.table_name(stream_schema_message['stream'], is_temporary=True)
+                self._log(
+                    'info',
+                    'load_csv.create_temp_table.start',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=temp_table
+                )
                 cur.execute(self.create_table_query(table_name=temp_table, is_temporary=True))
+                self._log(
+                    'info',
+                    'load_csv.create_temp_table.complete',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=temp_table
+                )
 
                 copy_sql = "COPY {} ({}) FROM STDIN WITH (FORMAT CSV, ESCAPE '\\')".format(
                     temp_table,
                     ', '.join(self.column_names())
                 )
-                self.logger.debug(copy_sql)
+                self._log(
+                    'info',
+                    'load_csv.copy.start',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=temp_table,
+                    batch_size_rows=count,
+                    size_bytes=size_bytes
+                )
                 with open(file, "rb") as f:
                     cur.copy_expert(copy_sql, f)
+                self._log(
+                    'info',
+                    'load_csv.copy.complete',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=temp_table,
+                    batch_size_rows=count
+                )
                 
                 # Build SQL column expressions with type casts for inserts/updates
                 select_expressions = self._select_column_expressions()
                 
                 if len(self.stream_schema_message['key_properties']) > 0:
                     try:
+                        self._log(
+                            'info',
+                            'load_csv.update.start',
+                            stream_name=stream,
+                            schema_name=self.schema_name,
+                            table_name=table_name,
+                            batch_size_rows=count
+                        )
                         cur.execute(self.update_from_temp_table(temp_table, select_expressions))
                         updates = cur.rowcount
+                        self._log(
+                            'info',
+                            'load_csv.update.complete',
+                            stream_name=stream,
+                            schema_name=self.schema_name,
+                            table_name=table_name,
+                            updates=updates
+                        )
                     except Exception as e:
+                        self._log(
+                            'error',
+                            'load_csv.update.error',
+                            stream_name=stream,
+                            schema_name=self.schema_name,
+                            table_name=table_name,
+                            error="{}: {}".format(type(e).__name__, str(e).replace('\n', ' '))
+                        )
                         # NOTE: We are pruning the \n from here to make sure we capture the error properly in stdout
                         self.logger.error("Error: %s", str(e).replace('\n', ' '))
                         raise Exception(str(e).replace('\n', ' '))
+                self._log(
+                    'info',
+                    'load_csv.insert.start',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=table_name,
+                    batch_size_rows=count
+                )
                 cur.execute(self.insert_from_temp_table(temp_table, select_expressions))
                 inserts = cur.rowcount
+                self._log(
+                    'info',
+                    'load_csv.insert.complete',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=table_name,
+                    inserts=inserts
+                )
 
-                self.logger.info('Loading into %s: %s',
-                                 self.table_name(stream, False),
-                                 json.dumps({'inserts': inserts, 'updates': updates, 'size_bytes': size_bytes}))
+                self._log(
+                    'info',
+                    'load_csv.complete',
+                    stream_name=stream,
+                    schema_name=self.schema_name,
+                    table_name=table_name,
+                    batch_size_rows=count,
+                    inserts=inserts,
+                    updates=updates,
+                    size_bytes=size_bytes
+                )
 
     def _select_column_expressions(self):
         """
@@ -567,8 +658,21 @@ class DbSync:
 
         if len(schema_rows) == 0:
             query = "CREATE SCHEMA IF NOT EXISTS {}".format(schema_name)
-            self.logger.info("Schema '%s' does not exist. Creating... %s", schema_name, query)
+            self._log(
+                'info',
+                'schema.sync.start',
+                function='create_schema_if_not_exists',
+                operation='create_schema',
+                schema_name=schema_name
+            )
             self.query(query)
+            self._log(
+                'info',
+                'schema.sync.complete',
+                function='create_schema_if_not_exists',
+                operation='create_schema',
+                schema_name=schema_name
+            )
 
             self.grant_privilege(schema_name, self.grantees, self.grant_usage_on_schema)
 
@@ -599,6 +703,18 @@ class DbSync:
             for (name, properties_schema) in self.flatten_schema.items()
             if name.lower() not in columns_dict
         ]
+
+        if columns_to_add:
+            self._log(
+                'info',
+                'schema.columns.pending',
+                function='update_columns',
+                operation='add_column',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream),
+                columns=columns_to_add
+            )
 
         for column in columns_to_add:
             self.add_column(column, stream)
@@ -634,8 +750,43 @@ class DbSync:
 
     def add_column(self, column, stream):
         add_column = "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {}".format(self.table_name(stream), column)
-        self.logger.info('Adding column: %s', add_column)
-        self.query(add_column)
+        self._log(
+            'info',
+            'schema.alter.start',
+            function='add_column',
+            operation='add_column',
+            stream_name=stream,
+            schema_name=self.schema_name,
+            table_name=self.table_name(stream),
+            column=column,
+            sql=add_column
+        )
+        try:
+            self.query(add_column)
+            self._log(
+                'info',
+                'schema.alter.complete',
+                function='add_column',
+                operation='add_column',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream),
+                column=column
+            )
+        except Exception as exc:
+            self._log(
+                'error',
+                'schema.alter.error',
+                function='add_column',
+                operation='add_column',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream),
+                column=column,
+                error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+                exception_action='reraise'
+            )
+            raise
 
     def sync_table(self):
         stream_schema_message = self.stream_schema_message
@@ -653,14 +804,57 @@ class DbSync:
         found_tables = [table for table in (self.get_tables()) if f'"{table["table_name"].lower()}"' == table_name]
         if len(found_tables) == 0:
             query = self.create_table_query()
-            self.logger.info("Table '%s' does not exist. Creating... %s", table_name, query)
+            self._log(
+                'info',
+                'schema.sync.start',
+                function='sync_table',
+                operation='create_table',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream),
+                sql=query
+            )
             self.query(query)
+            self._log(
+                'info',
+                'schema.sync.complete',
+                function='sync_table',
+                operation='create_table',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream)
+            )
 
             self.grant_privilege(self.schema_name, self.grantees, self.grant_select_on_all_tables_in_schema)
         else:
-            self.logger.info("Table '%s' exists", table_name)
+            self._log(
+                'info',
+                'schema.sync.start',
+                function='sync_table',
+                operation='update_columns',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream)
+            )
             # Log existing column types before updating
             columns = self.get_table_columns(table_name)
-            self.logger.info("Existing column types in table '%s': %s", table_name, 
-                            json.dumps({col['column_name']: col['data_type'] for col in columns}))
+            self._log(
+                'info',
+                'schema.columns.current',
+                function='sync_table',
+                operation='inspect_columns',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream),
+                existing_columns={col['column_name']: col['data_type'] for col in columns}
+            )
             self.update_columns()
+            self._log(
+                'info',
+                'schema.sync.complete',
+                function='sync_table',
+                operation='update_columns',
+                stream_name=stream,
+                schema_name=self.schema_name,
+                table_name=self.table_name(stream)
+            )
