@@ -295,7 +295,7 @@ class DbSync:
         getattr(self.logger, level)("%s %s", event, json.dumps(payload, sort_keys=True, default=str))
 
     def open_connection(self):
-        conn_string = "host='{}' dbname='{}' user='{}' password='{}' port='{}'".format(
+        conn_string = "host='{}' dbname='{}' user='{}' password='{}' port='{}' connect_timeout='120'".format(
             self.connection_config['host'],
             self.connection_config['dbname'],
             self.connection_config['user'],
