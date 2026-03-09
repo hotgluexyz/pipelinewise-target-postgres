@@ -16,6 +16,7 @@ from jsonschema import Draft7Validator, FormatChecker
 from singer import get_logger
 
 from target_postgres.db_sync import DbSync
+from target_postgres.log_helper import log_event
 
 LOGGER = get_logger('target_postgres')
 
@@ -30,11 +31,6 @@ class RecordValidationException(Exception):
 
 class InvalidValidationOperationException(Exception):
     """Exception to raise when internal JSON schema validation process failed"""
-
-
-def log_event(event, *, level='info', **context):
-    payload = {k: v for k, v in context.items() if v is not None}
-    getattr(LOGGER, level)("%s %s", event, json.dumps(payload, sort_keys=True, default=str))
 
 
 def float_to_decimal(value):
@@ -224,9 +220,10 @@ def persist_lines(config, lines) -> None:
             else:
                 schema_message = o
 
-            log_event('schema.sync.start', stream_name=stream, operation='prepare_stream')
+            log_event(LOGGER, 'schema.sync.start', stream_name=stream, operation='prepare_stream')
             stream_to_sync[stream] = DbSync(config, schema_message)
             log_event(
+                LOGGER,
                 'schema.sync.context',
                 stream_name=stream,
                 schema_name=stream_to_sync[stream].schema_name,
@@ -235,6 +232,7 @@ def persist_lines(config, lines) -> None:
             stream_to_sync[stream].create_schema_if_not_exists()
             stream_to_sync[stream].sync_table()
             log_event(
+                LOGGER,
                 'schema.sync.complete',
                 stream_name=stream,
                 schema_name=stream_to_sync[stream].schema_name,
@@ -310,6 +308,7 @@ def flush_streams(
 
     streams_to_flush = list(streams_to_flush)
     log_event(
+        LOGGER,
         'flush_streams.start',
         stream_names=streams_to_flush,
         parallelism=parallelism,
@@ -329,6 +328,7 @@ def flush_streams(
             ) for stream in streams_to_flush)
     except Exception as exc:
         log_event(
+            LOGGER,
             'flush_streams.error',
             level='error',
             stream_names=streams_to_flush,
@@ -358,6 +358,7 @@ def flush_streams(
 
     # Return with state message with flushed positions
     log_event(
+        LOGGER,
         'flush_streams.complete',
         stream_names=streams_to_flush,
         elapsed_ms=int((time.monotonic() - flush_start_time) * 1000)
@@ -382,6 +383,7 @@ def load_stream_batch(stream, records_to_load, row_count, db_sync, delete_rows=F
         row_count[stream] = 0
     except Exception as exc:
         log_event(
+            LOGGER,
             'stream_batch.error',
             level='error',
             stream_name=stream,
@@ -398,6 +400,7 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
     """Take a list of records and load into database"""
     flush_start_time = time.monotonic()
     log_event(
+        LOGGER,
         'flush_records.start',
         stream_name=stream,
         schema_name=db_sync.schema_name,
@@ -419,6 +422,7 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
     try:
         db_sync.load_csv(csv_file, row_count, size_bytes)
         log_event(
+            LOGGER,
             'flush_records.complete',
             stream_name=stream,
             schema_name=db_sync.schema_name,
@@ -429,6 +433,7 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
         )
     except Exception as exc:
         log_event(
+            LOGGER,
             'flush_records.error',
             level='error',
             stream_name=stream,
@@ -465,6 +470,7 @@ def main():
         LOGGER.debug("Exiting normally")
     except Exception as exc:
         log_event(
+            LOGGER,
             'target.fatal_exit',
             level='error',
             error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),

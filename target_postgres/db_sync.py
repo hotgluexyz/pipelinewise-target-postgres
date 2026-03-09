@@ -10,6 +10,8 @@ import itertools
 import time
 from singer import get_logger
 
+from target_postgres.log_helper import log_event
+
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
 def validate_config(config):
@@ -290,10 +292,6 @@ class DbSync:
             self.flatten_schema = flatten_schema(stream_schema_message['schema'],
                                                  max_level=self.data_flattening_max_level)
 
-    def _log(self, event, *, level='info', **context):
-        payload = {k: v for k, v in context.items() if v is not None}
-        getattr(self.logger, level)("%s %s", event, json.dumps(payload, sort_keys=True, default=str))
-
     def open_connection(self):
         conn_string = "host='{}' dbname='{}' user='{}' password='{}' port='{}' connect_timeout='120'".format(
             self.connection_config['host'],
@@ -374,7 +372,7 @@ class DbSync:
         stream_schema_message = self.stream_schema_message
         stream = stream_schema_message['stream']
         table_name = self.table_name(stream, False)
-        self._log(
+        log_event(self.logger,
             'load_csv.start',
             level='info',
             stream_name=stream,
@@ -390,7 +388,7 @@ class DbSync:
                 updates = 0
 
                 temp_table = self.table_name(stream_schema_message['stream'], is_temporary=True)
-                self._log(
+                log_event(self.logger,
                     'load_csv.create_temp_table.start',
                     level='info',
                     stream_name=stream,
@@ -398,7 +396,7 @@ class DbSync:
                     table_name=temp_table
                 )
                 cur.execute(self.create_table_query(table_name=temp_table, is_temporary=True))
-                self._log(
+                log_event(self.logger,
                     'load_csv.create_temp_table.complete',
                     level='info',
                     stream_name=stream,
@@ -410,7 +408,7 @@ class DbSync:
                     temp_table,
                     ', '.join(self.column_names())
                 )
-                self._log(
+                log_event(self.logger,
                     'load_csv.copy.start',
                     level='info',
                     stream_name=stream,
@@ -421,7 +419,7 @@ class DbSync:
                 )
                 with open(file, "rb") as f:
                     cur.copy_expert(copy_sql, f)
-                self._log(
+                log_event(self.logger,
                     'load_csv.copy.complete',
                     level='info',
                     stream_name=stream,
@@ -435,7 +433,7 @@ class DbSync:
                 
                 if len(self.stream_schema_message['key_properties']) > 0:
                     try:
-                        self._log(
+                        log_event(self.logger,
                             'load_csv.update.start',
                             level='info',
                             stream_name=stream,
@@ -445,7 +443,7 @@ class DbSync:
                         )
                         cur.execute(self.update_from_temp_table(temp_table, select_expressions))
                         updates = cur.rowcount
-                        self._log(
+                        log_event(self.logger,
                             'load_csv.update.complete',
                             level='info',
                             stream_name=stream,
@@ -454,7 +452,7 @@ class DbSync:
                             updates=updates
                         )
                     except Exception as e:
-                        self._log(
+                        log_event(self.logger,
                             'load_csv.update.error',
                             level='error',
                             stream_name=stream,
@@ -465,7 +463,7 @@ class DbSync:
                         # NOTE: We are pruning the \n from here to make sure we capture the error properly in stdout
                         self.logger.error("Error: %s", str(e).replace('\n', ' '))
                         raise Exception(str(e).replace('\n', ' '))
-                self._log(
+                log_event(self.logger,
                     'load_csv.insert.start',
                     level='info',
                     stream_name=stream,
@@ -475,7 +473,7 @@ class DbSync:
                 )
                 cur.execute(self.insert_from_temp_table(temp_table, select_expressions))
                 inserts = cur.rowcount
-                self._log(
+                log_event(self.logger,
                     'load_csv.insert.complete',
                     level='info',
                     stream_name=stream,
@@ -484,7 +482,7 @@ class DbSync:
                     inserts=inserts
                 )
 
-                self._log(
+                log_event(self.logger,
                     'load_csv.complete',
                     level='info',
                     stream_name=stream,
@@ -658,7 +656,7 @@ class DbSync:
 
         if len(schema_rows) == 0:
             query = "CREATE SCHEMA IF NOT EXISTS {}".format(schema_name)
-            self._log(
+            log_event(self.logger,
                 'schema.sync.start',
                 level='info',
                 function='create_schema_if_not_exists',
@@ -666,7 +664,7 @@ class DbSync:
                 schema_name=schema_name
             )
             self.query(query)
-            self._log(
+            log_event(self.logger,
                 'schema.sync.complete',
                 level='info',
                 function='create_schema_if_not_exists',
@@ -705,7 +703,7 @@ class DbSync:
         ]
 
         if columns_to_add:
-            self._log(
+            log_event(self.logger,
                 'schema.columns.pending',
                 level='info',
                 function='update_columns',
@@ -750,7 +748,7 @@ class DbSync:
 
     def add_column(self, column, stream):
         add_column = "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {}".format(self.table_name(stream), column)
-        self._log(
+        log_event(self.logger,
             'schema.alter.start',
             level='info',
             function='add_column',
@@ -763,7 +761,7 @@ class DbSync:
         )
         try:
             self.query(add_column)
-            self._log(
+            log_event(self.logger,
                 'schema.alter.complete',
                 level='info',
                 function='add_column',
@@ -774,7 +772,7 @@ class DbSync:
                 column=column
             )
         except Exception as exc:
-            self._log(
+            log_event(self.logger,
                 'schema.alter.error',
                 level='error',
                 function='add_column',
@@ -804,7 +802,7 @@ class DbSync:
         found_tables = [table for table in (self.get_tables()) if f'"{table["table_name"].lower()}"' == table_name]
         if len(found_tables) == 0:
             query = self.create_table_query()
-            self._log(
+            log_event(self.logger,
                 'schema.sync.start',
                 level='info',
                 function='sync_table',
@@ -815,7 +813,7 @@ class DbSync:
                 sql=query
             )
             self.query(query)
-            self._log(
+            log_event(self.logger,
                 'schema.sync.complete',
                 level='info',
                 function='sync_table',
@@ -827,7 +825,7 @@ class DbSync:
 
             self.grant_privilege(self.schema_name, self.grantees, self.grant_select_on_all_tables_in_schema)
         else:
-            self._log(
+            log_event(self.logger,
                 'schema.sync.start',
                 level='info',
                 function='sync_table',
@@ -838,7 +836,7 @@ class DbSync:
             )
             # Log existing column types before updating
             columns = self.get_table_columns(table_name)
-            self._log(
+            log_event(self.logger,
                 'schema.columns.current',
                 level='info',
                 function='sync_table',
@@ -849,7 +847,7 @@ class DbSync:
                 existing_columns={col['column_name']: col['data_type'] for col in columns}
             )
             self.update_columns()
-            self._log(
+            log_event(self.logger,
                 'schema.sync.complete',
                 level='info',
                 function='sync_table',
