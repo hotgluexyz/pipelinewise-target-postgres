@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import copy
+import time
 from datetime import datetime
 from decimal import Decimal
 from tempfile import mkstemp
@@ -15,6 +16,7 @@ from jsonschema import Draft7Validator, FormatChecker
 from singer import get_logger
 
 from target_postgres.db_sync import DbSync
+from target_postgres.log_helper import log_event
 
 LOGGER = get_logger('target_postgres')
 
@@ -214,12 +216,29 @@ def persist_lines(config, lines) -> None:
                 config['insertion_method_tables'] = []
     
             if config.get('add_metadata_columns') or config.get('hard_delete'):
-                stream_to_sync[stream] = DbSync(config, add_metadata_columns_to_schema(o))
+                schema_message = add_metadata_columns_to_schema(o)
             else:
-                stream_to_sync[stream] = DbSync(config, o)
+                schema_message = o
 
+            log_event(LOGGER, 'schema.sync.start', stream_name=stream, operation='prepare_stream')
+            stream_to_sync[stream] = DbSync(config, schema_message)
+            log_event(
+                LOGGER,
+                'schema.sync.context',
+                stream_name=stream,
+                schema_name=stream_to_sync[stream].schema_name,
+                table_name=stream_to_sync[stream].table_name(stream)
+            )
             stream_to_sync[stream].create_schema_if_not_exists()
             stream_to_sync[stream].sync_table()
+            log_event(
+                LOGGER,
+                'schema.sync.complete',
+                stream_name=stream,
+                schema_name=stream_to_sync[stream].schema_name,
+                table_name=stream_to_sync[stream].table_name(stream),
+                operation='prepare_stream'
+            )
 
             row_count[stream] = 0
             total_row_count[stream] = 0
@@ -267,6 +286,7 @@ def flush_streams(
     """
     parallelism = config.get("parallelism", DEFAULT_PARALLELISM)
     max_parallelism = config.get("max_parallelism", DEFAULT_MAX_PARALLELISM)
+    flush_start_time = time.monotonic()
 
     # Parallelism 0 means auto parallelism:
     #
@@ -286,16 +306,37 @@ def flush_streams(
     else:
         streams_to_flush = streams.keys()
 
+    streams_to_flush = list(streams_to_flush)
+    log_event(
+        LOGGER,
+        'flush_streams.start',
+        stream_names=streams_to_flush,
+        parallelism=parallelism,
+        filter_streams=filter_streams
+    )
+
     # Single-host, thread-based parallelism
-    with parallel_backend('threading', n_jobs=parallelism):
-        Parallel()(delayed(load_stream_batch)(
-            stream=stream,
-            records_to_load=streams[stream],
-            row_count=row_count,
-            db_sync=stream_to_sync[stream],
-            delete_rows=config.get('hard_delete'),
-            temp_dir=config.get('temp_dir')
-        ) for stream in streams_to_flush)
+    try:
+        with parallel_backend('threading', n_jobs=parallelism):
+            Parallel()(delayed(load_stream_batch)(
+                stream=stream,
+                records_to_load=streams[stream],
+                row_count=row_count,
+                db_sync=stream_to_sync[stream],
+                delete_rows=config.get('hard_delete'),
+                temp_dir=config.get('temp_dir')
+            ) for stream in streams_to_flush)
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            'flush_streams.error',
+            level='error',
+            stream_names=streams_to_flush,
+            elapsed_ms=int((time.monotonic() - flush_start_time) * 1000),
+            error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+            exception_action='reraise'
+        )
+        raise
 
     # reset flushed stream records to empty to avoid flushing same records
     for stream in streams_to_flush:
@@ -316,6 +357,12 @@ def flush_streams(
             flushed_state = copy.deepcopy(state)
 
     # Return with state message with flushed positions
+    log_event(
+        LOGGER,
+        'flush_streams.complete',
+        stream_names=streams_to_flush,
+        elapsed_ms=int((time.monotonic() - flush_start_time) * 1000)
+    )
     return flushed_state
 
 
@@ -324,23 +371,42 @@ def load_stream_batch(stream, records_to_load, row_count, db_sync, delete_rows=F
     """Load a batch of records and do post load operations, like creating
     or deleting rows"""
     # Load into Postgres
-    if row_count[stream] > 0:
-        flush_records(stream, records_to_load, row_count[stream], db_sync, temp_dir)
+    try:
+        if row_count[stream] > 0:
+            flush_records(stream, records_to_load, row_count[stream], db_sync, temp_dir)
 
-    # Load finished, create indices if required
-    db_sync.create_indices(stream)
+        db_sync.create_indices(stream)
 
-    # Delete soft-deleted, flagged rows - where _sdc_deleted at is not null
-    if delete_rows:
-        db_sync.delete_rows(stream)
+        if delete_rows:
+            db_sync.delete_rows(stream)
 
-    # reset row count for the current stream
-    row_count[stream] = 0
+        row_count[stream] = 0
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            'stream_batch.error',
+            level='error',
+            stream_name=stream,
+            schema_name=db_sync.schema_name,
+            table_name=db_sync.table_name(stream),
+            error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+            exception_action='reraise'
+        )
+        raise
 
 
 # pylint: disable=unused-argument
 def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
     """Take a list of records and load into database"""
+    flush_start_time = time.monotonic()
+    log_event(
+        LOGGER,
+        'flush_records.start',
+        stream_name=stream,
+        schema_name=db_sync.schema_name,
+        table_name=db_sync.table_name(stream),
+        batch_size_rows=row_count
+    )
     if temp_dir:
         temp_dir = os.path.expanduser(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)
@@ -353,7 +419,33 @@ def flush_records(stream, records_to_load, row_count, db_sync, temp_dir=None):
             f.write(bytes(csv_line + '\n', 'UTF-8'))
 
     size_bytes = os.path.getsize(csv_file)
-    db_sync.load_csv(csv_file, row_count, size_bytes)
+    try:
+        db_sync.load_csv(csv_file, row_count, size_bytes)
+        log_event(
+            LOGGER,
+            'flush_records.complete',
+            stream_name=stream,
+            schema_name=db_sync.schema_name,
+            table_name=db_sync.table_name(stream),
+            batch_size_rows=row_count,
+            size_bytes=size_bytes,
+            elapsed_ms=int((time.monotonic() - flush_start_time) * 1000)
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            'flush_records.error',
+            level='error',
+            stream_name=stream,
+            schema_name=db_sync.schema_name,
+            table_name=db_sync.table_name(stream),
+            batch_size_rows=row_count,
+            size_bytes=size_bytes,
+            elapsed_ms=int((time.monotonic() - flush_start_time) * 1000),
+            error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+            exception_action='reraise'
+        )
+        raise
 
     # Delete temp file
     os.remove(csv_file)
@@ -373,9 +465,18 @@ def main():
 
     # Consume singer messages
     singer_messages = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
-    persist_lines(config, singer_messages)
-
-    LOGGER.debug("Exiting normally")
+    try:
+        persist_lines(config, singer_messages)
+        LOGGER.debug("Exiting normally")
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            'target.fatal_exit',
+            level='error',
+            error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+            exception_action='reraise'
+        )
+        raise
 
 
 if __name__ == '__main__':
