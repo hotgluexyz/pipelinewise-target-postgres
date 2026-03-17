@@ -49,7 +49,7 @@ def _run_parallel_fail_fast(
             future.result()
     except Exception:
         # Do not wait for remaining workers; exit quickly and re-raise
-        executor.shutdown(wait=False)
+        executor.shutdown(wait=False, cancel_futures=True)
         raise
     else:
         executor.shutdown(wait=True)
