@@ -34,7 +34,8 @@ def _run_parallel_fail_fast(
     Run load_stream_batch for each stream in parallel with fail-fast behavior:
     on first exception, do not wait for remaining workers; re-raise immediately.
     """
-    with ThreadPoolExecutor(max_workers=parallelism) as executor:
+    executor = ThreadPoolExecutor(max_workers=parallelism)
+    try:
         futures = {
             executor.submit(
                 load_stream_batch,
@@ -43,14 +44,15 @@ def _run_parallel_fail_fast(
             ): stream
             for stream in streams_to_flush
         }
-        try:
-            for future in as_completed(futures):
-                # Raise immediately on first exception; no blocking on other workers
-                future.result()
-        except Exception:
-            # Do not wait for remaining workers; exit quickly and re-raise
-            executor.shutdown(wait=False)
-            raise
+        for future in as_completed(futures):
+            # Raise immediately on first exception; no blocking on other workers
+            future.result()
+    except Exception:
+        # Do not wait for remaining workers; exit quickly and re-raise
+        executor.shutdown(wait=False)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
 
 class RecordValidationException(Exception):
