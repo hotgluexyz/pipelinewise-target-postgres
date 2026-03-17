@@ -35,6 +35,7 @@ def _run_parallel_fail_fast(
     on first exception, do not wait for remaining workers; re-raise immediately.
     """
     executor = ThreadPoolExecutor(max_workers=parallelism)
+    futures = {}
     try:
         futures = {
             executor.submit(
