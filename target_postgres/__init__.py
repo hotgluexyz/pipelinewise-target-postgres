@@ -7,11 +7,11 @@ import os
 import sys
 import copy
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from decimal import Decimal
 from tempfile import mkstemp
 
-from joblib import Parallel, delayed, parallel_backend
 from jsonschema import Draft7Validator, FormatChecker
 from singer import get_logger
 
@@ -23,6 +23,40 @@ LOGGER = get_logger('target_postgres')
 DEFAULT_BATCH_SIZE_ROWS = 100000
 DEFAULT_PARALLELISM = 0  # 0 The number of threads used to flush tables
 DEFAULT_MAX_PARALLELISM = 16  # Don't use more than this number of threads by default when flushing streams in parallel
+
+
+def _run_parallel_fail_fast(
+    streams_to_flush,
+    load_stream_batch_args,
+    parallelism,
+):
+    """
+    Run load_stream_batch for each stream in parallel with fail-fast behavior:
+    on first exception, do not wait for remaining workers; re-raise immediately.
+    """
+    executor = ThreadPoolExecutor(max_workers=parallelism)
+    futures = {}
+    try:
+        futures = {
+            executor.submit(
+                load_stream_batch,
+                stream=stream,
+                **load_stream_batch_args(stream),
+            ): stream
+            for stream in streams_to_flush
+        }
+        for future in as_completed(futures):
+            # Raise immediately on first exception; no blocking on other workers
+            future.result()
+    except Exception:
+        # Cancel pending futures
+        for f in futures:
+            f.cancel()
+
+        executor.shutdown(wait=False)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
 
 class RecordValidationException(Exception):
@@ -315,17 +349,21 @@ def flush_streams(
         filter_streams=filter_streams
     )
 
-    # Single-host, thread-based parallelism
+    def load_stream_batch_args(stream):
+        return {
+            'records_to_load': streams[stream],
+            'row_count': row_count,
+            'db_sync': stream_to_sync[stream],
+            'delete_rows': config.get('hard_delete'),
+            'temp_dir': config.get('temp_dir'),
+        }
+
     try:
-        with parallel_backend('threading', n_jobs=parallelism):
-            Parallel()(delayed(load_stream_batch)(
-                stream=stream,
-                records_to_load=streams[stream],
-                row_count=row_count,
-                db_sync=stream_to_sync[stream],
-                delete_rows=config.get('hard_delete'),
-                temp_dir=config.get('temp_dir')
-            ) for stream in streams_to_flush)
+        _run_parallel_fail_fast(
+            streams_to_flush,
+            load_stream_batch_args,
+            parallelism,
+        )
     except Exception as exc:
         log_event(
             LOGGER,
