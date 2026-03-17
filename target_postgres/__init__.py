@@ -48,8 +48,11 @@ def _run_parallel_fail_fast(
             # Raise immediately on first exception; no blocking on other workers
             future.result()
     except Exception:
-        # Do not wait for remaining workers; exit quickly and re-raise
-        executor.shutdown(wait=False, cancel_futures=True)
+        # Cancel pending futures
+        for f in futures:
+            f.cancel()
+
+        executor.shutdown(wait=False)
         raise
     else:
         executor.shutdown(wait=True)
