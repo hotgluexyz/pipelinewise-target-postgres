@@ -54,7 +54,7 @@ def _run_parallel_fail_fast(
             f.cancel()
 
         executor.shutdown(wait=False)
-        LOGGER.exception("Flush failed; exiting so remaining workers cannot hang the job")
+        LOGGER.debug("Flush failed; exiting so remaining workers cannot hang the job")
         os._exit(1)
     else:
         executor.shutdown(wait=True)
