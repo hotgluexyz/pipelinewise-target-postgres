@@ -6,21 +6,58 @@ import json
 import os
 import sys
 import copy
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from decimal import Decimal
 from tempfile import mkstemp
 
-from joblib import Parallel, delayed, parallel_backend
 from jsonschema import Draft7Validator, FormatChecker
 from singer import get_logger
 
 from target_postgres.db_sync import DbSync
+from target_postgres.log_helper import log_event
 
 LOGGER = get_logger('target_postgres')
 
 DEFAULT_BATCH_SIZE_ROWS = 100000
 DEFAULT_PARALLELISM = 0  # 0 The number of threads used to flush tables
 DEFAULT_MAX_PARALLELISM = 16  # Don't use more than this number of threads by default when flushing streams in parallel
+
+
+def _run_parallel_fail_fast(
+    streams_to_flush,
+    load_stream_batch_args,
+    parallelism,
+):
+    """
+    Run load_stream_batch for each stream in parallel with fail-fast behavior:
+    on first exception, do not wait for remaining workers; re-raise immediately.
+    """
+    executor = ThreadPoolExecutor(max_workers=parallelism)
+    futures = {}
+    try:
+        futures = {
+            executor.submit(
+                load_stream_batch,
+                stream=stream,
+                **load_stream_batch_args(stream),
+            ): stream
+            for stream in streams_to_flush
+        }
+        for future in as_completed(futures):
+            # Raise immediately on first exception; no blocking on other workers
+            future.result()
+    except Exception:
+        # Cancel pending futures
+        for f in futures:
+            f.cancel()
+
+        executor.shutdown(wait=False)
+        LOGGER.debug("Flush failed; exiting so remaining workers cannot hang the job")
+        raise
+    else:
+        executor.shutdown(wait=True)
 
 
 class RecordValidationException(Exception):
@@ -267,6 +304,7 @@ def flush_streams(
     """
     parallelism = config.get("parallelism", DEFAULT_PARALLELISM)
     max_parallelism = config.get("max_parallelism", DEFAULT_MAX_PARALLELISM)
+    flush_start_time = time.monotonic()
 
     # Parallelism 0 means auto parallelism:
     #
@@ -286,16 +324,41 @@ def flush_streams(
     else:
         streams_to_flush = streams.keys()
 
-    # Single-host, thread-based parallelism
-    with parallel_backend('threading', n_jobs=parallelism):
-        Parallel()(delayed(load_stream_batch)(
-            stream=stream,
-            records_to_load=streams[stream],
-            row_count=row_count,
-            db_sync=stream_to_sync[stream],
-            delete_rows=config.get('hard_delete'),
-            temp_dir=config.get('temp_dir')
-        ) for stream in streams_to_flush)
+    streams_to_flush = list(streams_to_flush)
+    log_event(
+        LOGGER,
+        'flush_streams.start',
+        stream_names=streams_to_flush,
+        parallelism=parallelism,
+        filter_streams=filter_streams
+    )
+
+    def load_stream_batch_args(stream):
+        return {
+            'records_to_load': streams[stream],
+            'row_count': row_count,
+            'db_sync': stream_to_sync[stream],
+            'delete_rows': config.get('hard_delete'),
+            'temp_dir': config.get('temp_dir'),
+        }
+
+    try:
+        _run_parallel_fail_fast(
+            streams_to_flush,
+            load_stream_batch_args,
+            parallelism,
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            'flush_streams.error',
+            level='error',
+            stream_names=streams_to_flush,
+            elapsed_ms=int((time.monotonic() - flush_start_time) * 1000),
+            error="{}: {}".format(type(exc).__name__, str(exc).replace('\n', ' ')),
+            exception_action='reraise'
+        )
+        raise
 
     # reset flushed stream records to empty to avoid flushing same records
     for stream in streams_to_flush:
@@ -373,9 +436,12 @@ def main():
 
     # Consume singer messages
     singer_messages = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
-    persist_lines(config, singer_messages)
-
-    LOGGER.debug("Exiting normally")
+    try:
+        persist_lines(config, singer_messages)
+        LOGGER.debug("Exiting normally")
+    except Exception:
+        LOGGER.exception("Target failed; exiting so remaining workers cannot hang the job")
+        os._exit(1)
 
 
 if __name__ == '__main__':
